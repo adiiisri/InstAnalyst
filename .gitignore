@@ -1,0 +1,17 @@
+.env*
+node_modules/
+dist/
+build/
+.next/
+target/
+__pycache__/
+venv/
+*.db
+*.sqlite
+*.log
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.pem
+*.key
