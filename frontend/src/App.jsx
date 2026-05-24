@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 
-const PROD_API_URL = 'https://instanalyst-api.onrender.com/api'; // Replace this with your actual Render URL later
+const PROD_API_URL = 'https://instanalyst.onrender.com/api';
 const API_URL = import.meta.env.PROD ? PROD_API_URL : 'http://localhost:5001/api';
 
 export default function App() {
