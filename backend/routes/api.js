@@ -422,4 +422,28 @@ router.get('/proxy', async (req, res) => {
   }
 });
 
+// --- PROXY ENDPOINT FOR CORS BYPASS (FFmpeg) ---
+router.get('/proxy', async (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).json({ error: 'Missing url parameter' });
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error('Failed to fetch from url');
+    
+    // Copy headers (specifically content-type and content-length)
+    res.setHeader('Content-Type', response.headers.get('content-type') || 'application/octet-stream');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    
+    // Convert ReadableStream to Node stream and pipe to response
+    const body = response.body;
+    for await (const chunk of body) {
+      res.write(chunk);
+    }
+    res.end();
+  } catch (err) {
+    console.error('[Proxy Error]', err.message);
+    res.status(500).json({ error: 'Proxy fetch failed' });
+  }
+});
+
 export default router;

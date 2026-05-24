@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import ImageEditor from './components/ImageEditor';
+import VideoEditor from './components/VideoEditor';
 
 const PROD_API_URL = 'https://instanalyst.onrender.com/api';
 const API_URL = import.meta.env.PROD ? PROD_API_URL : 'http://localhost:5001/api';
@@ -8,6 +10,7 @@ export default function App() {
   const [inputUrl, setInputUrl] = useState('');
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadHistory, setDownloadHistory] = useState([]);
+  const [editingMedia, setEditingMedia] = useState(null);
   const [toasts, setToasts] = useState([]);
   
   // Dynamic Analytics State
@@ -281,6 +284,26 @@ export default function App() {
         )}
 
         {/* Results Area */}
+        {editingMedia && (
+          <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(0,0,0,0.8)', zIndex: 1000, display: 'flex', justifyContent: 'center', alignItems: 'center', overflow: 'auto', padding: '20px', boxSizing: 'border-box' }}>
+             <div style={{ width: '100%', maxWidth: '800px', background: 'var(--bg-primary)', borderRadius: '12px', padding: '10px', boxShadow: '0 10px 25px rgba(0,0,0,0.5)', maxHeight: '95vh', overflowY: 'auto' }}>
+               {editingMedia.type === 'video' ? (
+                 <VideoEditor 
+                   src={editingMedia.src} 
+                   apiUrl={API_URL}
+                   onCancel={() => setEditingMedia(null)} 
+                   onDownload={(url) => { forceDownload(url, 'instanalyst-edited.mp4'); setEditingMedia(null); }} 
+                 />
+               ) : (
+                 <ImageEditor 
+                   src={editingMedia.src} 
+                   onCancel={() => setEditingMedia(null)} 
+                   onDownload={(url) => { forceDownload(url, 'instanalyst-edited.jpg'); setEditingMedia(null); }} 
+                 />
+               )}
+             </div>
+          </div>
+        )}
         {downloadHistory.length > 0 && (
           <div className="results-area">
             {downloadHistory.map((item, idx) => (
@@ -329,16 +352,25 @@ export default function App() {
                   <div className="result-info">
                     <h3 className="result-title">{item.title}</h3>
                     <div style={{color: '#6b7280', fontSize: '0.9rem'}}>{item.mediaType} • {item.fileSize}</div>
-                    <button 
-                      className="btn-download-result" 
-                      style={{border: 'none', padding: '10px 16px', borderRadius: '6px', background: 'var(--accent-primary)', color: 'white', fontWeight: '600', cursor: 'pointer'}}
-                      onClick={() => {
-                        addToast(`Downloading highest quality ${item.mediaType}...`, 'success');
-                        forceDownload(item.downloadUrl, `InstAnalyst_${item.mediaType}.${item.mediaType === 'Photo' ? 'jpg' : 'mp4'}`);
-                      }}
-                    >
-                      Download High Quality {item.mediaType === 'Photo' ? 'JPG' : 'MP4'}
-                    </button>
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' }}>
+                      <button 
+                        className="btn-download-result" 
+                        style={{flex: 1, border: 'none', padding: '10px 16px', borderRadius: '6px', background: 'var(--accent-primary)', color: 'white', fontWeight: '600', cursor: 'pointer'}}
+                        onClick={() => {
+                          addToast(`Downloading highest quality ${item.mediaType}...`, 'success');
+                          forceDownload(item.downloadUrl, `InstAnalyst_${item.mediaType}.${item.mediaType === 'Photo' ? 'jpg' : 'mp4'}`);
+                        }}
+                      >
+                        Download Original
+                      </button>
+                      <button 
+                        className="btn-paste" 
+                        style={{flex: 1, padding: '10px 16px', margin: 0, justifyContent: 'center'}}
+                        onClick={() => setEditingMedia({ type: item.mediaType === 'Photo' ? 'photo' : 'video', src: item.downloadUrl })}
+                      >
+                        Edit Media
+                      </button>
+                    </div>
                   </div>
                 </div>
               )
