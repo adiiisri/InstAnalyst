@@ -427,12 +427,19 @@ router.get('/proxy', async (req, res) => {
   const { url } = req.query;
   if (!url) return res.status(400).json({ error: 'Missing url parameter' });
   try {
-    const response = await fetch(url);
-    if (!response.ok) throw new Error('Failed to fetch from url');
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': '*/*',
+        'Referer': 'https://www.instagram.com/'
+      }
+    });
+    if (!response.ok) throw new Error(`Failed to fetch from url: ${response.status} ${response.statusText}`);
     
     // Copy headers (specifically content-type and content-length)
     res.setHeader('Content-Type', response.headers.get('content-type') || 'application/octet-stream');
     res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     
     // Convert ReadableStream to Node stream and pipe to response
     const body = response.body;
