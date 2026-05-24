@@ -179,7 +179,12 @@ export default function App() {
       {/* 1. Header (White) */}
       <header className="fastdl-header">
         <div className="header-brand">
-          <svg viewBox="0 0 24 24"><path d="M12 2L2 12h3v8h14v-8h3L12 2z" /></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="18" y1="20" x2="18" y2="10"></line>
+            <line x1="6" y1="20" x2="6" y2="16"></line>
+            <line x1="12" y1="4" x2="12" y2="20"></line>
+            <polyline points="8 16 12 20 16 16"></polyline>
+          </svg>
           InstAnalyst
         </div>
         <nav className="header-nav">
@@ -265,7 +270,12 @@ export default function App() {
         {/* Big Logo beneath form */}
         {downloadHistory.length === 0 && (
           <div className="hero-logo-large">
-            <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 12h3v8h14v-8h3L12 2z" /></svg>
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="20" x2="18" y2="10"></line>
+              <line x1="6" y1="20" x2="6" y2="16"></line>
+              <line x1="12" y1="4" x2="12" y2="20"></line>
+              <polyline points="8 16 12 20 16 16"></polyline>
+            </svg>
             InstAnalyst
           </div>
         )}
