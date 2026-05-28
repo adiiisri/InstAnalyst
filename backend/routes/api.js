@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
-import { execFile } from 'child_process';
+import { execFile, execSync } from 'child_process';
 import MediaModel from '../models/Media.js';
 import FollowerModel from '../models/Follower.js';
 import { getDbStatus } from '../db.js';
@@ -11,9 +11,23 @@ import { getDbStatus } from '../db.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const envPath = path.resolve(__dirname, '../.env');
 
+// Dynamically detect if python3 or python is available (cross-platform compatibility)
+let pythonCommand = 'python';
+try {
+  execSync('python3 --version', { stdio: 'ignore' });
+  pythonCommand = 'python3';
+} catch (e) {
+  try {
+    execSync('python --version', { stdio: 'ignore' });
+    pythonCommand = 'python';
+  } catch (err) {
+    console.warn('[System Warning] Python was not found on the system path.');
+  }
+}
+
 const runPythonScraper = (url) => {
   return new Promise((resolve, reject) => {
-    const pythonPath = 'python';
+    const pythonPath = pythonCommand;
     const scriptPath = path.resolve(__dirname, '../download.py');
     const env = { ...process.env };
 
