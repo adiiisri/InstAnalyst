@@ -5,8 +5,8 @@ import VideoEditor from './components/VideoEditor';
 const PROD_API_URL = 'https://instanalyst.onrender.com/api';
 const API_URL = import.meta.env.PROD ? PROD_API_URL : 'http://localhost:5001/api';
 
-// Fetch with timeout helper
-const fetchWithTimeout = (url, options = {}, timeoutMs = 65000) => {
+// Fetch with timeout helper (short 20s timeout per attempt, we retry ourselves)
+const fetchWithTimeout = (url, options = {}, timeoutMs = 20000) => {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
   return fetch(url, { ...options, signal: controller.signal })
@@ -17,7 +17,9 @@ export default function App() {
   const [activePill, setActivePill] = useState('Video');
   const [inputUrl, setInputUrl] = useState('');
   const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadStatus, setDownloadStatus] = useState(''); // live status text
   const [downloadHistory, setDownloadHistory] = useState([]);
+  const [lastAttemptUrl, setLastAttemptUrl] = useState('');
   const [editingMedia, setEditingMedia] = useState(null);
   const [toasts, setToasts] = useState([]);
   
@@ -111,57 +113,65 @@ export default function App() {
     if (!urlToFetch) return;
 
     setIsDownloading(true);
+    setDownloadHistory([]);
+    setLastAttemptUrl(urlToFetch);
+    setDownloadStatus('Connecting...');
 
-    const MAX_RETRIES = 2;
+    // Keep retrying for up to 3 minutes total (Render cold start can take ~90s)
+    const MAX_WAIT_MS = 180000;
+    const ATTEMPT_TIMEOUT_MS = 20000; // 20s per attempt
+    const RETRY_DELAY_MS = 2000;      // 2s gap between attempts
+    const startTime = Date.now();
+    let attempt = 0;
     let lastError = null;
 
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        if (attempt > 1) {
-          addToast(`Server waking up... retrying (${attempt}/${MAX_RETRIES})`, 'info');
-          await new Promise(r => setTimeout(r, 3000));
-        }
+    while (Date.now() - startTime < MAX_WAIT_MS) {
+      attempt++;
+      const elapsed = Math.round((Date.now() - startTime) / 1000);
 
+      if (attempt === 1) {
+        setDownloadStatus('Connecting to server...');
+      } else {
+        setDownloadStatus(`Server waking up... ${elapsed}s elapsed, retrying...`);
+      }
+
+      try {
         const response = await fetchWithTimeout(`${API_URL}/download`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ url: urlToFetch, type: activePill })
-        }, 65000);
+        }, ATTEMPT_TIMEOUT_MS);
 
         if (response.ok) {
           const newMedia = await response.json();
           setDownloadHistory([newMedia]);
           setInputUrl('');
-          addToast('Media analyzed successfully!', 'success');
+          setDownloadStatus('');
+          addToast('Media fetched successfully!', 'success');
           setIsDownloading(false);
           return;
         } else {
+          // A real API error (not a connectivity error) — don't retry
           const errData = await response.json().catch(() => ({}));
-          throw new Error(errData.message || 'Failed to analyze link.');
+          lastError = new Error(errData.message || 'Failed to analyze link.');
+          break;
         }
       } catch (err) {
         lastError = err;
-        const isTimeout = err.name === 'AbortError' || err.message?.includes('abort');
-        const isNetworkError = err.message === 'Failed to fetch';
-        // Only retry on timeout/network errors, not API errors
-        if (attempt < MAX_RETRIES && (isTimeout || isNetworkError)) {
-          console.warn(`[Attempt ${attempt}] Network error, retrying...`, err.message);
-          continue;
-        }
-        break;
+        const isConnErr = err.name === 'AbortError' || err.message === 'Failed to fetch';
+        if (!isConnErr) break; // Non-network error, stop retrying
+        console.warn(`[Attempt ${attempt}] Cold-start timeout, retrying in ${RETRY_DELAY_MS}ms...`);
+        await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
       }
     }
 
-    console.error('Download failed after retries:', lastError);
+    // All retries exhausted
     const isConnectivity = lastError?.name === 'AbortError' || lastError?.message === 'Failed to fetch';
     const userMessage = isConnectivity
-      ? 'Server is starting up — please try again in a few seconds.'
+      ? 'Server took too long to respond. Click Retry or try again in a moment.'
       : (lastError?.message || 'Failed to download media.');
-    addToast(userMessage, 'error');
-    setDownloadHistory([{
-      error: 'DOWNLOAD_FAILED',
-      message: userMessage
-    }]);
+    setDownloadStatus('');
+    setDownloadHistory([{ error: 'DOWNLOAD_FAILED', message: userMessage }]);
     setIsDownloading(false);
   };
 
@@ -287,7 +297,12 @@ export default function App() {
               </button>
             )}
             <button type="submit" className="btn-download" disabled={isDownloading || !inputUrl}>
-              {isDownloading ? '...' : 'Download'}
+              {isDownloading ? (
+                <span style={{display:'flex',alignItems:'center',gap:'6px'}}>
+                  <span style={{display:'inline-block',width:'12px',height:'12px',border:'2px solid rgba(255,255,255,0.3)',borderTopColor:'#fff',borderRadius:'50%',animation:'spin 0.8s linear infinite'}}></span>
+                  {downloadStatus || 'Loading...'}
+                </span>
+              ) : 'Download'}
             </button>
           </div>
         </form>
@@ -340,6 +355,15 @@ export default function App() {
                       <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.95rem', lineHeight: '1.5' }}>
                         {item.message}
                       </p>
+                      {lastAttemptUrl && (
+                        <button
+                          className="btn-download"
+                          style={{ alignSelf: 'flex-start', padding: '8px 20px', fontSize: '0.9rem' }}
+                          onClick={() => handleDownload(null, lastAttemptUrl)}
+                        >
+                          🔄 Retry
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
