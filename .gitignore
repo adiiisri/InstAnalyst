@@ -15,3 +15,5 @@ venv/
 Thumbs.db
 *.pem
 *.key
+*.html
+backend/test-*

@@ -110,42 +110,18 @@ export default function App() {
         setInputUrl('');
         addToast('Media analyzed successfully!', 'success');
       } else {
-        throw new Error('Failed to analyze link.');
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.message || 'Failed to analyze link.');
       }
     } catch (err) {
-      // Offline fallback
-      setTimeout(() => {
-        let mockResult;
-        if (activePill === 'Carousel') {
-          mockResult = {
-            url: urlToFetch,
-            title: 'Instagram Photo Carousel',
-            mediaType: 'Carousel',
-            isCarousel: true,
-            items: [
-              { id: 1, thumbnail: 'https://images.unsplash.com/photo-1516574187841-cb9cc2ca948b?auto=format&fit=crop&w=350&h=350&q=80', downloadUrl: 'https://images.unsplash.com/photo-1516574187841-cb9cc2ca948b?auto=format&fit=crop&w=1080&h=1080&q=100', fileSize: '1.2 MB' },
-              { id: 2, thumbnail: 'https://images.unsplash.com/photo-1469334031218-e382a71b716b?auto=format&fit=crop&w=350&h=350&q=80', downloadUrl: 'https://images.unsplash.com/photo-1469334031218-e382a71b716b?auto=format&fit=crop&w=1080&h=1080&q=100', fileSize: '1.5 MB' },
-              { id: 3, thumbnail: 'https://images.unsplash.com/photo-1529139574466-a303027c1d8b?auto=format&fit=crop&w=350&h=350&q=80', downloadUrl: 'https://images.unsplash.com/photo-1529139574466-a303027c1d8b?auto=format&fit=crop&w=1080&h=1080&q=100', fileSize: '1.1 MB' }
-            ]
-          };
-        } else {
-          const isPhoto = activePill === 'Photo';
-          mockResult = {
-            url: urlToFetch,
-            title: 'Instagram ' + activePill + ' Ready',
-            thumbnail: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=350&h=350&q=80',
-            mediaType: activePill,
-            isCarousel: false,
-            fileSize: isPhoto ? '1.8 MB' : '15.4 MB',
-            downloadUrl: isPhoto ? 'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=1080&h=1080&q=100' : 'https://www.w3schools.com/html/mov_bbb.mp4',
-          };
-        }
-        setDownloadHistory([mockResult]);
-        setInputUrl('');
-        addToast('Media parsed (Offline Mode)', 'success');
-      }, 800);
+      console.error(err);
+      addToast(err.message || 'Failed to download media.', 'error');
+      setDownloadHistory([{
+        error: 'DOWNLOAD_FAILED',
+        message: err.message || 'Failed to download media.'
+      }]);
     } finally {
-      setTimeout(() => setIsDownloading(false), 800);
+      setIsDownloading(false);
     }
   };
 
@@ -175,6 +151,12 @@ export default function App() {
     handleHashChange(); // Run once on mount
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
+
+  // Clear input URL and search history when active tab changes
+  useEffect(() => {
+    setInputUrl('');
+    setDownloadHistory([]);
+  }, [activePill]);
 
   return (
     <div className="app-wrapper">
@@ -306,8 +288,23 @@ export default function App() {
         )}
         {downloadHistory.length > 0 && (
           <div className="results-area">
-            {downloadHistory.map((item, idx) => (
-              item.isCarousel ? (
+            {downloadHistory.map((item, idx) => {
+              if (item.error) {
+                return (
+                  <div className="result-card" key={idx} style={{ borderColor: '#ef4444', borderStyle: 'solid', borderWidth: '1px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', padding: '10px 0', width: '100%' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#ef4444', fontWeight: 'bold' }}>
+                        <span style={{ fontSize: '1.5rem' }}>⚠️</span>
+                        <span>Download Failed</span>
+                      </div>
+                      <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.95rem', lineHeight: '1.5' }}>
+                        {item.message}
+                      </p>
+                    </div>
+                  </div>
+                );
+              }
+              return item.isCarousel ? (
                 <div key={idx} style={{width: '100%'}}>
                   <div className="carousel-header">
                     <h3 style={{color: 'var(--text-primary)'}}>{item.title} ({item.items.length} Photos)</h3>
@@ -373,8 +370,8 @@ export default function App() {
                     </div>
                   </div>
                 </div>
-              )
-            ))}
+              );
+            })}
           </div>
         )}
 

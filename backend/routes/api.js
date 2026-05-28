@@ -1,9 +1,70 @@
 import express from 'express';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import { fileURLToPath } from 'url';
+import { execFile } from 'child_process';
 import MediaModel from '../models/Media.js';
 import FollowerModel from '../models/Follower.js';
 import { getDbStatus } from '../db.js';
-import instagramDl from 'instagram-url-direct';
-const instagramGetUrl = instagramDl.instagramGetUrl || instagramDl;
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const envPath = path.resolve(__dirname, '../.env');
+
+const runPythonScraper = (url) => {
+  return new Promise((resolve, reject) => {
+    const pythonPath = 'python';
+    const scriptPath = path.resolve(__dirname, '../download.py');
+    const env = { ...process.env };
+
+    execFile(pythonPath, [scriptPath, url], { env }, (error, stdout, stderr) => {
+      if (error) {
+        console.error('[Python Exec Error]', error);
+        reject(new Error(error.message || 'Python execution failed.'));
+        return;
+      }
+      try {
+        const marker = 'RESULT:';
+        const idx = stdout.indexOf(marker);
+        if (idx === -1) {
+          reject(new Error('Python script did not return a valid result.'));
+          return;
+        }
+        const jsonStr = stdout.substring(idx + marker.length).trim();
+        const result = JSON.parse(jsonStr);
+        resolve(result);
+      } catch (err) {
+        console.error('[Python JSON Parse Error]', err, stdout);
+        reject(err);
+      }
+    });
+  });
+};
+
+const updateEnvFile = (key, value) => {
+  let content = '';
+  if (fs.existsSync(envPath)) {
+    content = fs.readFileSync(envPath, 'utf8');
+  }
+  
+  const lines = content.split('\n');
+  let found = false;
+  const newLines = lines.map(line => {
+    if (line.trim().startsWith(`${key}=`)) {
+      found = true;
+      return `${key}=${value}`;
+    }
+    return line;
+  });
+  
+  if (!found) {
+    newLines.push(`${key}=${value}`);
+  }
+  
+  fs.writeFileSync(envPath, newLines.join('\n'), 'utf8');
+  process.env[key] = value;
+};
+
 
 const router = express.Router();
 
@@ -84,162 +145,49 @@ router.get('/status', (req, res) => {
   });
 });
 
+
 // 2. Media Downloader Endpoint
 router.post('/download', async (req, res) => {
-  const { url, type } = req.body;
+  const { url } = req.body;
 
   if (!url) {
     return res.status(400).json({ error: 'URL is required' });
   }
 
-  // Check simple validity
   if (!url.includes('instagram.com/')) {
     return res.status(400).json({ error: 'Invalid URL. Must be a valid Instagram link.' });
   }
 
-  // Attempt real extraction
-  let realData = null;
   try {
-    const igResult = await instagramGetUrl(url);
-    if (igResult && igResult.url_list && igResult.url_list.length > 0) {
-      realData = igResult;
+    console.log('[Downloader] Running Python scraper for:', url);
+    const downloadResult = await runPythonScraper(url);
+
+    if (downloadResult.error) {
+      return res.status(400).json({
+        error: downloadResult.error,
+        message: downloadResult.message || 'Failed to extract Instagram media.'
+      });
     }
+
+    // Save metadata to database if connected
+    if (getDbStatus() === 'CONNECTED') {
+      try {
+        const media = new MediaModel(downloadResult);
+        await media.save();
+      } catch (dbErr) {
+        console.error('[Database Error] Failed to save media download metadata:', dbErr.message);
+      }
+    }
+
+    return res.json(downloadResult);
+
   } catch (err) {
-    console.warn("[Instagram Scraper API] Failed to extract real URL. Falling back to mock data.", err.message);
+    console.error('[Downloader Error] Python scraper failed:', err.message);
+    return res.status(500).json({
+      error: 'EXTRACTION_FAILED',
+      message: `Scraper error: ${err.message}`
+    });
   }
-
-  if (realData) {
-    if (realData.url_list.length > 1 || type === 'Carousel') {
-      const carouselItems = realData.url_list.map((dlUrl, idx) => ({
-        id: idx + 1,
-        thumbnail: dlUrl, 
-        downloadUrl: dlUrl,
-        fileSize: 'Unknown Size'
-      }));
-      
-      const realCarouselResult = {
-        url,
-        title: 'Real Instagram Carousel',
-        mediaType: 'Carousel',
-        isCarousel: true,
-        items: carouselItems,
-        downloadedAt: new Date()
-      };
-      
-      return res.json(realCarouselResult);
-    } else {
-      const dlUrl = realData.url_list[0];
-      let inferredType = 'Photo';
-      if (dlUrl.includes('.mp4') || dlUrl.includes('video')) inferredType = 'Video';
-      
-      const realDownloadResult = {
-        url,
-        title: 'Real Instagram ' + inferredType,
-        thumbnail: dlUrl, 
-        mediaType: inferredType,
-        isCarousel: false,
-        fileSize: 'Unknown Size',
-        downloadUrl: dlUrl,
-        downloadedAt: new Date()
-      };
-      
-      return res.json(realDownloadResult);
-    }
-  }
-
-  // Fallback: Handle Carousel Posts manually if scraper fails
-  if (type === 'Carousel') {
-    const mockCarouselResult = {
-      url,
-      title: 'Instagram Photo Carousel',
-      mediaType: 'Carousel',
-      isCarousel: true,
-      items: [
-        {
-          id: 1,
-          thumbnail: 'https://images.unsplash.com/photo-1516574187841-cb9cc2ca948b?auto=format&fit=crop&w=350&h=350&q=80',
-          downloadUrl: 'https://images.unsplash.com/photo-1516574187841-cb9cc2ca948b?auto=format&fit=crop&w=1080&h=1080&q=100',
-          fileSize: '1.2 MB'
-        },
-        {
-          id: 2,
-          thumbnail: 'https://images.unsplash.com/photo-1469334031218-e382a71b716b?auto=format&fit=crop&w=350&h=350&q=80',
-          downloadUrl: 'https://images.unsplash.com/photo-1469334031218-e382a71b716b?auto=format&fit=crop&w=1080&h=1080&q=100',
-          fileSize: '1.5 MB'
-        },
-        {
-          id: 3,
-          thumbnail: 'https://images.unsplash.com/photo-1529139574466-a303027c1d8b?auto=format&fit=crop&w=350&h=350&q=80',
-          downloadUrl: 'https://images.unsplash.com/photo-1529139574466-a303027c1d8b?auto=format&fit=crop&w=1080&h=1080&q=100',
-          fileSize: '1.1 MB'
-        }
-      ],
-      downloadedAt: new Date()
-    };
-    
-    return setTimeout(() => {
-      res.json(mockCarouselResult);
-    }, 800);
-  }
-
-  // Determine standard media type based on URL
-  let mediaType = 'Photo';
-  let title = 'Instagram High-Res Photo';
-  let size = '1.8 MB';
-  let thumbnail = 'https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=350&h=350&q=80';
-  let mediaUrl = 'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=1080&h=1080&q=100'; // High res photo
-
-  if (url.includes('/reel/') || url.includes('/reels/')) {
-    mediaType = 'Reel';
-    title = 'High-Speed Action Reel';
-    size = '18.4 MB';
-    thumbnail = 'https://images.unsplash.com/photo-1536240478700-b869070f9279?auto=format&fit=crop&w=350&h=350&q=80';
-    mediaUrl = 'https://www.w3schools.com/html/mov_bbb.mp4'; // Playable sample video
-  } else if (url.includes('/stories/') || url.includes('/story/')) {
-    mediaType = 'Story';
-    title = 'Instagram Story Clip';
-    size = '2.1 MB';
-    thumbnail = 'https://images.unsplash.com/photo-1542751371-adc38448a05e?auto=format&fit=crop&w=350&h=350&q=80';
-    mediaUrl = 'https://www.w3schools.com/html/mov_bbb.mp4'; // Playable sample video
-  } else if (url.includes('/p/')) {
-    mediaType = 'Photo';
-    title = 'Instagram Image Post';
-    size = '1.8 MB';
-    thumbnail = 'https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=350&h=350&q=80';
-    mediaUrl = 'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=1080&h=1080&q=100'; // High res photo
-  } else if (url.includes('/video/')) {
-    mediaType = 'Video';
-    title = 'Instagram Video';
-    size = '12.5 MB';
-    thumbnail = 'https://images.unsplash.com/photo-1536240478700-b869070f9279?auto=format&fit=crop&w=350&h=350&q=80';
-    mediaUrl = 'https://www.w3schools.com/html/mov_bbb.mp4'; // Playable sample video
-  }
-
-  const mockDownloadResult = {
-    url,
-    title,
-    thumbnail,
-    mediaType,
-    isCarousel: false,
-    fileSize: size,
-    downloadUrl: mediaUrl,
-    downloadedAt: new Date()
-  };
-
-  // Save to database if connected
-  if (getDbStatus() === 'CONNECTED') {
-    try {
-      const media = new MediaModel(mockDownloadResult);
-      await media.save();
-    } catch (err) {
-      console.error('[Database Error] Failed to save media download metadata:', err.message);
-    }
-  }
-
-  // Simulate server analysis time (500ms)
-  setTimeout(() => {
-    res.json(mockDownloadResult);
-  }, 800);
 });
 
 // 3. Analytics Summary Endpoint
@@ -401,31 +349,13 @@ router.get('/analytics/user/:username', async (req, res) => {
   }, 600);
 });
 
-// 7. Proxy Download Endpoint
+// 7. Proxy Download Endpoint (with CORS bypass, proper streaming & Content-Disposition support)
 router.get('/proxy', async (req, res) => {
   const { url, filename } = req.query;
-  if (!url) return res.status(400).send('No URL provided');
-  
-  try {
-    const response = await fetch(url);
-    if (!response.ok) throw new Error('Failed to fetch from CDN');
-    
-    res.setHeader('Content-Disposition', `attachment; filename="${filename || 'InstAnalyst_Media'}"`);
-    res.setHeader('Content-Type', response.headers.get('content-type') || 'application/octet-stream');
-    
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    res.send(buffer);
-  } catch (err) {
-    console.error('[Proxy Error]', err.message);
-    res.status(500).send('Failed to proxy media');
+  if (!url) {
+    return res.status(400).json({ error: 'Missing url parameter' });
   }
-});
 
-// --- PROXY ENDPOINT FOR CORS BYPASS (FFmpeg) ---
-router.get('/proxy', async (req, res) => {
-  const { url } = req.query;
-  if (!url) return res.status(400).json({ error: 'Missing url parameter' });
   try {
     const response = await fetch(url, {
       headers: {
@@ -434,14 +364,31 @@ router.get('/proxy', async (req, res) => {
         'Referer': 'https://www.instagram.com/'
       }
     });
-    if (!response.ok) throw new Error(`Failed to fetch from url: ${response.status} ${response.statusText}`);
-    
-    // Copy headers (specifically content-type and content-length)
-    res.setHeader('Content-Type', response.headers.get('content-type') || 'application/octet-stream');
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch media from CDN: ${response.status} ${response.statusText}`);
+    }
+
+    // Set CORS and Cross-Origin Resource Policy headers
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     
-    // Convert ReadableStream to Node stream and pipe to response
+    // Set headers from the source CDN response
+    const contentType = response.headers.get('content-type') || 'application/octet-stream';
+    const contentLength = response.headers.get('content-length');
+    
+    res.setHeader('Content-Type', contentType);
+    if (contentLength) {
+      res.setHeader('Content-Length', contentLength);
+    }
+
+    // Force direct download if filename is specified
+    if (filename) {
+      const safeFilename = filename.replace(/[^a-zA-Z0-9_.-]/g, '_');
+      res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
+    }
+
+    // Stream the body chunk-by-chunk to the client
     const body = response.body;
     for await (const chunk of body) {
       res.write(chunk);
@@ -449,7 +396,9 @@ router.get('/proxy', async (req, res) => {
     res.end();
   } catch (err) {
     console.error('[Proxy Error]', err.message);
-    res.status(500).json({ error: 'Proxy fetch failed' });
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Proxy fetch failed', message: err.message });
+    }
   }
 });
 
