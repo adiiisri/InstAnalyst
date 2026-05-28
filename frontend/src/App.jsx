@@ -5,6 +5,14 @@ import VideoEditor from './components/VideoEditor';
 const PROD_API_URL = 'https://instanalyst.onrender.com/api';
 const API_URL = import.meta.env.PROD ? PROD_API_URL : 'http://localhost:5001/api';
 
+// Fetch with timeout helper
+const fetchWithTimeout = (url, options = {}, timeoutMs = 65000) => {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...options, signal: controller.signal })
+    .finally(() => clearTimeout(id));
+};
+
 export default function App() {
   const [activePill, setActivePill] = useState('Video');
   const [inputUrl, setInputUrl] = useState('');
@@ -24,6 +32,13 @@ export default function App() {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
+
+  // Pre-warm Render backend on page load to reduce cold-start latency
+  useEffect(() => {
+    if (import.meta.env.PROD) {
+      fetch(`${PROD_API_URL.replace('/api', '/')}`).catch(() => {});
+    }
+  }, []);
 
   const addToast = useCallback((message, type = 'info') => {
     const id = Date.now();
@@ -97,32 +112,57 @@ export default function App() {
 
     setIsDownloading(true);
 
-    try {
-      const response = await fetch(`${API_URL}/download`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: urlToFetch, type: activePill })
-      });
+    const MAX_RETRIES = 2;
+    let lastError = null;
 
-      if (response.ok) {
-        const newMedia = await response.json();
-        setDownloadHistory([newMedia]); // Show only latest result
-        setInputUrl('');
-        addToast('Media analyzed successfully!', 'success');
-      } else {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.message || 'Failed to analyze link.');
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        if (attempt > 1) {
+          addToast(`Server waking up... retrying (${attempt}/${MAX_RETRIES})`, 'info');
+          await new Promise(r => setTimeout(r, 3000));
+        }
+
+        const response = await fetchWithTimeout(`${API_URL}/download`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: urlToFetch, type: activePill })
+        }, 65000);
+
+        if (response.ok) {
+          const newMedia = await response.json();
+          setDownloadHistory([newMedia]);
+          setInputUrl('');
+          addToast('Media analyzed successfully!', 'success');
+          setIsDownloading(false);
+          return;
+        } else {
+          const errData = await response.json().catch(() => ({}));
+          throw new Error(errData.message || 'Failed to analyze link.');
+        }
+      } catch (err) {
+        lastError = err;
+        const isTimeout = err.name === 'AbortError' || err.message?.includes('abort');
+        const isNetworkError = err.message === 'Failed to fetch';
+        // Only retry on timeout/network errors, not API errors
+        if (attempt < MAX_RETRIES && (isTimeout || isNetworkError)) {
+          console.warn(`[Attempt ${attempt}] Network error, retrying...`, err.message);
+          continue;
+        }
+        break;
       }
-    } catch (err) {
-      console.error(err);
-      addToast(err.message || 'Failed to download media.', 'error');
-      setDownloadHistory([{
-        error: 'DOWNLOAD_FAILED',
-        message: err.message || 'Failed to download media.'
-      }]);
-    } finally {
-      setIsDownloading(false);
     }
+
+    console.error('Download failed after retries:', lastError);
+    const isConnectivity = lastError?.name === 'AbortError' || lastError?.message === 'Failed to fetch';
+    const userMessage = isConnectivity
+      ? 'Server is starting up — please try again in a few seconds.'
+      : (lastError?.message || 'Failed to download media.');
+    addToast(userMessage, 'error');
+    setDownloadHistory([{
+      error: 'DOWNLOAD_FAILED',
+      message: userMessage
+    }]);
+    setIsDownloading(false);
   };
 
   const handlePaste = async () => {
