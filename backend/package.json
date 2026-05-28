@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "postinstall": "pip install yt-dlp || python3 -m pip install yt-dlp || python -m pip install yt-dlp"
+    "postinstall": "pip install yt-dlp --break-system-packages || python3 -m pip install yt-dlp --break-system-packages || python -m pip install yt-dlp --break-system-packages || pip install yt-dlp || python3 -m pip install yt-dlp || python -m pip install yt-dlp"
   },
   "dependencies": {
     "@sasmeee/igdl": "^0.0.1-security",
