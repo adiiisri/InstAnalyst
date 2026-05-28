@@ -1,83 +1,11 @@
 import express from 'express';
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
-import { fileURLToPath } from 'url';
-import { execFile, execSync } from 'child_process';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const instagramDl = require('instagram-url-direct');
+const instagramGetUrl = instagramDl.instagramGetUrl || instagramDl;
 import MediaModel from '../models/Media.js';
 import FollowerModel from '../models/Follower.js';
 import { getDbStatus } from '../db.js';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const envPath = path.resolve(__dirname, '../.env');
-
-// Dynamically detect if python3 or python is available (cross-platform compatibility)
-let pythonCommand = 'python';
-try {
-  execSync('python3 --version', { stdio: 'ignore' });
-  pythonCommand = 'python3';
-} catch (e) {
-  try {
-    execSync('python --version', { stdio: 'ignore' });
-    pythonCommand = 'python';
-  } catch (err) {
-    console.warn('[System Warning] Python was not found on the system path.');
-  }
-}
-
-const runPythonScraper = (url) => {
-  return new Promise((resolve, reject) => {
-    const pythonPath = pythonCommand;
-    const scriptPath = path.resolve(__dirname, '../download.py');
-    const env = { ...process.env };
-
-    execFile(pythonPath, [scriptPath, url], { env }, (error, stdout, stderr) => {
-      if (error) {
-        console.error('[Python Exec Error]', error);
-        reject(new Error(error.message || 'Python execution failed.'));
-        return;
-      }
-      try {
-        const marker = 'RESULT:';
-        const idx = stdout.indexOf(marker);
-        if (idx === -1) {
-          reject(new Error('Python script did not return a valid result.'));
-          return;
-        }
-        const jsonStr = stdout.substring(idx + marker.length).trim();
-        const result = JSON.parse(jsonStr);
-        resolve(result);
-      } catch (err) {
-        console.error('[Python JSON Parse Error]', err, stdout);
-        reject(err);
-      }
-    });
-  });
-};
-
-const updateEnvFile = (key, value) => {
-  let content = '';
-  if (fs.existsSync(envPath)) {
-    content = fs.readFileSync(envPath, 'utf8');
-  }
-  
-  const lines = content.split('\n');
-  let found = false;
-  const newLines = lines.map(line => {
-    if (line.trim().startsWith(`${key}=`)) {
-      found = true;
-      return `${key}=${value}`;
-    }
-    return line;
-  });
-  
-  if (!found) {
-    newLines.push(`${key}=${value}`);
-  }
-  
-  fs.writeFileSync(envPath, newLines.join('\n'), 'utf8');
-  process.env[key] = value;
-};
 
 
 const router = express.Router();
@@ -162,7 +90,7 @@ router.get('/status', (req, res) => {
 
 // 2. Media Downloader Endpoint
 router.post('/download', async (req, res) => {
-  const { url } = req.body;
+  const { url, type } = req.body;
 
   if (!url) {
     return res.status(400).json({ error: 'URL is required' });
@@ -172,37 +100,79 @@ router.post('/download', async (req, res) => {
     return res.status(400).json({ error: 'Invalid URL. Must be a valid Instagram link.' });
   }
 
+  // Attempt real extraction via instagram-url-direct
+  let realData = null;
   try {
-    console.log('[Downloader] Running Python scraper for:', url);
-    const downloadResult = await runPythonScraper(url);
-
-    if (downloadResult.error) {
-      return res.status(400).json({
-        error: downloadResult.error,
-        message: downloadResult.message || 'Failed to extract Instagram media.'
-      });
+    console.log('[Downloader] Extracting media URL for:', url);
+    const igResult = await instagramGetUrl(url);
+    if (igResult && igResult.url_list && igResult.url_list.length > 0) {
+      realData = igResult;
     }
-
-    // Save metadata to database if connected
-    if (getDbStatus() === 'CONNECTED') {
-      try {
-        const media = new MediaModel(downloadResult);
-        await media.save();
-      } catch (dbErr) {
-        console.error('[Database Error] Failed to save media download metadata:', dbErr.message);
-      }
-    }
-
-    return res.json(downloadResult);
-
   } catch (err) {
-    console.error('[Downloader Error] Python scraper failed:', err.message);
+    console.warn('[Downloader] instagram-url-direct failed:', err.message);
     return res.status(500).json({
       error: 'EXTRACTION_FAILED',
-      message: `Scraper error: ${err.message}`
+      message: 'Could not extract media. The post may be private or the link is invalid.'
     });
   }
+
+  if (!realData) {
+    return res.status(400).json({
+      error: 'NO_MEDIA_FOUND',
+      message: 'No downloadable media found. The post may be private.'
+    });
+  }
+
+  // Build result object
+  let result;
+  if (realData.url_list.length > 1 || type === 'Carousel') {
+    // Carousel / multi-image post
+    const carouselItems = realData.url_list.map((dlUrl, idx) => ({
+      id: idx + 1,
+      thumbnail: dlUrl,
+      downloadUrl: dlUrl,
+      fileSize: 'Unknown Size'
+    }));
+    result = {
+      url,
+      title: 'Instagram Carousel',
+      mediaType: 'Carousel',
+      isCarousel: true,
+      items: carouselItems,
+      downloadedAt: new Date()
+    };
+  } else {
+    const dlUrl = realData.url_list[0];
+    let inferredType = 'Photo';
+    if (dlUrl.includes('.mp4') || dlUrl.includes('video')) inferredType = 'Video';
+    if (inferredType === 'Video' && (url.includes('/reel/') || url.includes('/reels/'))) inferredType = 'Reel';
+    if (inferredType === 'Video' && (url.includes('/stories/') || url.includes('/story/'))) inferredType = 'Story';
+
+    result = {
+      url,
+      title: 'Instagram ' + inferredType,
+      thumbnail: dlUrl,
+      mediaType: inferredType,
+      isCarousel: false,
+      fileSize: 'Unknown Size',
+      downloadUrl: dlUrl,
+      downloadedAt: new Date()
+    };
+  }
+
+  // Save metadata to database if connected
+  if (getDbStatus() === 'CONNECTED') {
+    try {
+      const media = new MediaModel(result);
+      await media.save();
+    } catch (dbErr) {
+      console.error('[Database Error] Failed to save media metadata:', dbErr.message);
+    }
+  }
+
+  return res.json(result);
 });
+
 
 // 3. Analytics Summary Endpoint
 router.get('/analytics/summary', (req, res) => {
